@@ -12,9 +12,7 @@ Python program that sanitizes the following fields of metadata:
 * /PTEX.Fullbanner
 
 ## Python
-```bash
-python --version
-```
+The used python version is:
 ```
 version = 3.12.3
 ```
