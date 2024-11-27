@@ -13,11 +13,12 @@ Python program that sanitizes the following fields of metadata:
 
 ## Python
 The used python version is:
+
 ```
 version = 3.12.3
 ```
 
-## Install requirements.
+## Install requirements
 
 ```bash
 pip install -r requirements.txt
