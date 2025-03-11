@@ -1,5 +1,5 @@
 # Ghost
-Python program that sanitizes the following fields of metadata:
+Python program that sanitizes the following fields of metadata in PDF files:
 * /Author
 * /Producer
 * /Title  
