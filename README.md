@@ -1,5 +1,7 @@
 # Ghost
 
+<img src="assets/logo.png" alt="logo" style="width:50%; height:auto;">
+
 Ghost writes a copy of a PDF with metadata values removed.
 
 The default output path is the original filename with `_SANITIZED` appended before the
