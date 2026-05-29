@@ -1,67 +1,153 @@
+from __future__ import annotations
+
+import argparse
 import sys
-from PyPDF2 import PdfReader, PdfWriter
-import os
+from pathlib import Path
 
-def sanitize_pdf(input_file, verbose=False):
-    # Check if the input file exists
-    if not os.path.isfile(input_file):
-        print(f"Error: The file '{input_file}' does not exist.")
-        return
-    
-    # Extract the file name and extension
-    base_name, ext = os.path.splitext(input_file)
-    if ext.lower() != '.pdf':
-        print(f"Error: The file '{input_file}' is not a PDF.")
-        return
-    
-    output_file = f"{base_name}_SANITIZED.pdf"
-    
-    # Open and process the PDF
-    with open(input_file, "rb") as pd:
+
+SENSITIVE_METADATA_KEYS = (
+    "/Author",
+    "/Producer",
+    "/Title",
+    "/Subject",
+    "/Creator",
+    "/Keywords",
+    "/CreationDate",
+    "/ModDate",
+    "/Trapped",
+    "/PTEX.Fullbanner",
+)
+
+
+class SanitizationError(Exception):
+    """Raised when a PDF cannot be sanitized."""
+
+
+def default_output_path(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}_SANITIZED{input_path.suffix}")
+
+
+def sanitize_pdf(
+    input_file: str | Path,
+    output_file: str | Path | None = None,
+    *,
+    verbose: bool = False,
+    overwrite: bool = False,
+) -> Path:
+    """Copy a PDF to a new file with metadata values removed."""
+    input_path = Path(input_file)
+    output_path = Path(output_file) if output_file else default_output_path(input_path)
+
+    if not input_path.is_file():
+        raise SanitizationError(f"The file '{input_path}' does not exist.")
+
+    if input_path.suffix.lower() != ".pdf":
+        raise SanitizationError(f"The file '{input_path}' is not a PDF.")
+
+    if output_path.suffix.lower() != ".pdf":
+        raise SanitizationError(f"The output file '{output_path}' must use a .pdf extension.")
+
+    if input_path.resolve() == output_path.resolve(strict=False):
+        raise SanitizationError("The output file must be different from the input file.")
+
+    if output_path.exists() and not overwrite:
+        raise SanitizationError(
+            f"The output file '{output_path}' already exists. Use --overwrite to replace it."
+        )
+
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+        from PyPDF2.errors import PdfReadError
+    except ImportError as exc:
+        raise SanitizationError(
+            "Missing dependency 'PyPDF2'. Install it with: python3 -m pip install -r requirements.txt"
+        ) from exc
+
+    try:
         print("[+]\tReading the PDF file...")
-        reader = PdfReader(pd)
-        writer = PdfWriter()
+        with input_path.open("rb") as source:
+            reader = PdfReader(source)
 
-        # Add all pages to the new PDF
-        for page in reader.pages:
-            writer.add_page(page)
+            if reader.is_encrypted:
+                try:
+                    decrypt_result = reader.decrypt("")
+                except Exception as exc:  # PyPDF2 raises several encryption-specific exceptions.
+                    raise SanitizationError(
+                        "The PDF is encrypted and could not be opened with an empty password."
+                    ) from exc
 
-        # Check and sanitize metadata
-        if reader.metadata:
-            sanitized_metadata = {
-                    "/Author"   :   "",
-                    "/Producer" :   "",
-                    "/Title"    :   "",
-                    "/Subject"  :   "",
-                    "/Creator"  :   "",
-                    "/Keywords" :   "",
-                    "/CreationDate":"",
-                    "/ModDate"  :   "",
-                    "/Trapped"  :   "",
-                    "/PTEX.Fullbanner": ""
-                }
-            
-            for key, value in reader.metadata.items():
-                if verbose:
-                    print(f"[i]\t{key}: {value}")
-                sanitized_metadata[key] = ""
+                if decrypt_result == 0:
+                    raise SanitizationError(
+                        "The PDF is encrypted and could not be opened with an empty password."
+                    )
+
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+
+            sanitized_metadata = {key: "" for key in SENSITIVE_METADATA_KEYS}
+            if reader.metadata:
+                for key, value in reader.metadata.items():
+                    if verbose:
+                        print(f"[i]\t{key}: {value}")
+                    sanitized_metadata[str(key)] = ""
+            else:
+                print("[i]\tNo metadata found to sanitize.")
+
             writer.add_metadata(sanitized_metadata)
-            
-        else:
-            print("No metadata found to sanitize.")
 
-        # Write the new PDF
-        with open(output_file, "wb") as td:
-            print(f"[+]\tWriting sanitized PDF to '{output_file}'")
-            writer.write(td)
+            print(f"[+]\tWriting sanitized PDF to '{output_path}'")
+            with output_path.open("wb") as target:
+                writer.write(target)
+    except PdfReadError as exc:
+        raise SanitizationError(f"Could not read '{input_path}' as a valid PDF.") from exc
+    except OSError as exc:
+        raise SanitizationError(str(exc)) from exc
 
-    print("[+]\tSanitization complete.\n")
+    print("[+]\tSanitization complete.")
+    return output_path
 
-# Main function to handle command-line arguments
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Remove metadata values from a PDF by writing a sanitized copy."
+    )
+    parser.add_argument("input_pdf", help="Path to the PDF to sanitize.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Path for the sanitized PDF. Defaults to '<name>_SANITIZED.pdf'.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace the output file if it already exists.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Print metadata keys and values before they are removed.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+
+    try:
+        sanitize_pdf(
+            args.input_pdf,
+            args.output,
+            verbose=args.verbose,
+            overwrite=args.overwrite,
+        )
+    except SanitizationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print("Usage: python ghost.py <path_to_pdf> [-v | --verbose]")
-    else:
-        input_pdf = sys.argv[1]
-        verbose_mode = "-v" in sys.argv or "--verbose" in sys.argv
-        sanitize_pdf(input_pdf, verbose_mode)
+    raise SystemExit(main())
